@@ -23,7 +23,8 @@ class FileRepository(context: Context) {
                         mimeType = obj.optString("mimeType", "application/octet-stream"),
                         size = obj.optLong("size", 0L),
                         uploadDate = obj.optLong("uploadDate", System.currentTimeMillis()),
-                        telegramFileId = obj.optString("telegramFileId", "")
+                        telegramFileId = obj.optString("telegramFileId", ""),
+                        isEncrypted = obj.optBoolean("isEncrypted", true)
                     )
                 )
             }
@@ -55,6 +56,7 @@ class FileRepository(context: Context) {
                 put("size", file.size)
                 put("uploadDate", file.uploadDate)
                 put("telegramFileId", file.telegramFileId)
+                put("isEncrypted", file.isEncrypted)
             }
             jsonArray.put(obj)
         }
