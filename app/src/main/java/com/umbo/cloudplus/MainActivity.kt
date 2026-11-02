@@ -45,9 +45,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.compose.runtime.LaunchedEffect
 import com.umbo.cloudplus.data.DownloadedFile
 import com.umbo.cloudplus.data.DownloadedFileRepository
 import com.umbo.cloudplus.data.FileRepository
+import com.umbo.cloudplus.data.JinaVectorManager
 import com.umbo.cloudplus.data.SettingsRepository
 import com.umbo.cloudplus.data.TelegramUploader
 import com.umbo.cloudplus.data.UploadedFile
@@ -92,6 +94,7 @@ fun MainScreen() {
     val fileRepository = remember { FileRepository(context) }
     val downloadedFileRepository = remember { DownloadedFileRepository(context) }
     val telegramUploader = remember { TelegramUploader(context) }
+    val jinaVectorManager = remember { JinaVectorManager(context) }
 
     var currentTab by remember { mutableStateOf(NavigationTab.FILES) }
     var searchQuery by remember { mutableStateOf("") }
@@ -100,12 +103,109 @@ fun MainScreen() {
     var uploadedFiles by remember { mutableStateOf(fileRepository.getUploadedFiles()) }
     var downloadedFiles by remember { mutableStateOf(downloadedFileRepository.getDownloadedFiles()) }
 
+    var vectorScores by remember { mutableStateOf<Map<String, Float>>(emptyMap()) }
+    var isVectorSearching by remember { mutableStateOf(false) }
+
     var isUploading by remember { mutableStateOf(false) }
     var currentUploadingFileName by remember { mutableStateOf("") }
     var uploadProgress by remember { mutableFloatStateOf(0f) }
 
+    LaunchedEffect(searchQuery, settings.jinaApiKey, uploadedFiles) {
+        val trimmedQuery = searchQuery.trim()
+        if (trimmedQuery.isBlank()) {
+            vectorScores = emptyMap()
+            isVectorSearching = false
+            return@LaunchedEffect
+        }
+
+        if (!settings.isJinaConfigured) {
+            vectorScores = emptyMap()
+            isVectorSearching = false
+            return@LaunchedEffect
+        }
+
+        // Debounce typing by 300ms
+        kotlinx.coroutines.delay(300)
+
+        // Ensure all files have vectors generated on-the-fly
+        val missingVectorFiles = uploadedFiles.filter { it.vector.isNullOrEmpty() }
+        if (missingVectorFiles.isNotEmpty()) {
+            isVectorSearching = true
+            for (file in missingVectorFiles) {
+                val textContent = "File Name: ${file.name}\nMime Type: ${file.mimeType}"
+                val vecRes = jinaVectorManager.getEmbedding(
+                    text = textContent,
+                    apiKey = settings.jinaApiKey,
+                    task = "retrieval.passage"
+                )
+                vecRes.onSuccess { vec ->
+                    val updatedFile = file.copy(vector = vec)
+                    fileRepository.saveFile(updatedFile)
+                }
+            }
+            uploadedFiles = fileRepository.getUploadedFiles()
+        }
+
+        isVectorSearching = true
+        val queryEmbeddingRes = jinaVectorManager.getEmbedding(
+            text = trimmedQuery,
+            apiKey = settings.jinaApiKey,
+            task = "retrieval.query"
+        )
+        isVectorSearching = false
+
+        queryEmbeddingRes.onSuccess { queryVector ->
+            val scoresMap = mutableMapOf<String, Float>()
+            val latestFiles = fileRepository.getUploadedFiles()
+            for (file in latestFiles) {
+                val fileVec = file.vector
+                if (!fileVec.isNullOrEmpty()) {
+                    val similarity = jinaVectorManager.computeCosineSimilarity(queryVector, fileVec)
+                    scoresMap[file.id] = similarity
+                }
+            }
+            vectorScores = scoresMap
+        }.onFailure { error ->
+            vectorScores = emptyMap()
+            scope.launch {
+                snackbarHostState.showSnackbar("Jina Vector Search: ${error.message}")
+            }
+        }
+    }
+
     fun refreshFiles() {
         uploadedFiles = fileRepository.getUploadedFiles()
+    }
+
+    fun reindexFilesWithoutVectors() {
+        if (!settings.isJinaConfigured) return
+        val filesToProcess = uploadedFiles.filter { it.vector == null }
+        if (filesToProcess.isEmpty()) return
+
+        scope.launch {
+            isUploading = true
+            var processed = 0
+            for (file in filesToProcess) {
+                currentUploadingFileName = "⚡ Indexing Vector: ${file.name}"
+                uploadProgress = processed.toFloat() / filesToProcess.size.toFloat()
+
+                val textContent = "File Name: ${file.name}\nMime Type: ${file.mimeType}"
+                val embeddingRes = jinaVectorManager.getEmbedding(
+                    text = textContent,
+                    apiKey = settings.jinaApiKey,
+                    task = "retrieval.passage"
+                )
+
+                embeddingRes.onSuccess { vec ->
+                    val updatedFile = file.copy(vector = vec)
+                    fileRepository.saveFile(updatedFile)
+                }
+                processed++
+            }
+            isUploading = false
+            refreshFiles()
+            snackbarHostState.showSnackbar("تم توليد المتجهات لـ $processed ملف بنجاح!")
+        }
     }
 
     fun refreshDownloadedFiles() {
@@ -295,8 +395,13 @@ fun MainScreen() {
             ) {
                 TopSearchBar(
                     query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    placeholder = "\"Search \"Mountains"
+                    onQueryChange = { newQuery ->
+                        searchQuery = newQuery
+                        if (newQuery.isNotBlank() && currentTab != NavigationTab.FILES) {
+                            currentTab = NavigationTab.FILES
+                        }
+                    },
+                    placeholder = if (settings.isJinaConfigured) "⚡ Jina Vector Search files..." else "Search files..."
                 )
             }
         },
@@ -346,6 +451,16 @@ fun MainScreen() {
                                         onResult(result)
                                     }
                                 },
+                                onTestJinaConnection = { apiKeyToTest, onResult ->
+                                    scope.launch {
+                                        val result = jinaVectorManager.testConnection(apiKeyToTest)
+                                        onResult(result)
+                                    }
+                                },
+                                onReindexFiles = {
+                                    reindexFilesWithoutVectors()
+                                },
+                                filesWithoutVectorsCount = uploadedFiles.count { it.vector == null },
                                 totalFilesCount = uploadedFiles.size
                             )
                         }
@@ -353,6 +468,8 @@ fun MainScreen() {
                             FilesTabContent(
                                 searchQuery = searchQuery,
                                 files = uploadedFiles,
+                                vectorScores = vectorScores,
+                                isVectorSearching = isVectorSearching,
                                 onDownloadFile = { file ->
                                     handleDownloadFile(file)
                                 },
