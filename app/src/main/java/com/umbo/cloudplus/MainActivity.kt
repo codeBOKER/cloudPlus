@@ -1,8 +1,10 @@
 package com.umbo.cloudplus
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,9 +20,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Collections
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Collections
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material3.FabPosition
@@ -40,18 +44,24 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import com.umbo.cloudplus.data.DownloadedFile
+import com.umbo.cloudplus.data.DownloadedFileRepository
 import com.umbo.cloudplus.data.FileRepository
 import com.umbo.cloudplus.data.SettingsRepository
 import com.umbo.cloudplus.data.TelegramUploader
+import com.umbo.cloudplus.data.UploadedFile
 import com.umbo.cloudplus.ui.components.BottomNavigationBar
 import com.umbo.cloudplus.ui.components.TopSearchBar
 import com.umbo.cloudplus.ui.components.UploadFloatingActionButton
 import com.umbo.cloudplus.ui.components.UploadProgressBar
+import com.umbo.cloudplus.ui.screens.DownloadsTabContent
 import com.umbo.cloudplus.ui.screens.FilesTabContent
 import com.umbo.cloudplus.ui.screens.GalleryTabContent
 import com.umbo.cloudplus.ui.screens.MenuTabContent
 import com.umbo.cloudplus.ui.theme.cloudPlusTheme
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,6 +78,7 @@ class MainActivity : ComponentActivity() {
 enum class NavigationTab(val title: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector) {
     MENU("Menu", Icons.Filled.Menu, Icons.Outlined.Menu),
     FILES("Files", Icons.Filled.Folder, Icons.Outlined.Folder),
+    DOWNLOADS("Downloads", Icons.Filled.Download, Icons.Outlined.Download),
     GALLERY("Gallery", Icons.Filled.Collections, Icons.Outlined.Collections),
 }
 
@@ -79,6 +90,7 @@ fun MainScreen() {
 
     val settingsRepository = remember { SettingsRepository(context) }
     val fileRepository = remember { FileRepository(context) }
+    val downloadedFileRepository = remember { DownloadedFileRepository(context) }
     val telegramUploader = remember { TelegramUploader(context) }
 
     var currentTab by remember { mutableStateOf(NavigationTab.FILES) }
@@ -86,6 +98,7 @@ fun MainScreen() {
 
     var settings by remember { mutableStateOf(settingsRepository.getSettings()) }
     var uploadedFiles by remember { mutableStateOf(fileRepository.getUploadedFiles()) }
+    var downloadedFiles by remember { mutableStateOf(downloadedFileRepository.getDownloadedFiles()) }
 
     var isUploading by remember { mutableStateOf(false) }
     var currentUploadingFileName by remember { mutableStateOf("") }
@@ -93,6 +106,10 @@ fun MainScreen() {
 
     fun refreshFiles() {
         uploadedFiles = fileRepository.getUploadedFiles()
+    }
+
+    fun refreshDownloadedFiles() {
+        downloadedFiles = downloadedFileRepository.getDownloadedFiles()
     }
 
     fun handleUploadUris(uris: List<Uri>) {
@@ -129,13 +146,127 @@ fun MainScreen() {
                     refreshFiles()
                     successCount++
                 }.onFailure { error ->
-                    Toast.makeText(context, "خطأ في الرفع: ${error.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "خطأ في الرفع والتشفير: ${error.message}", Toast.LENGTH_LONG).show()
                 }
             }
             isUploading = false
             if (successCount > 0) {
-                snackbarHostState.showSnackbar("تم رفع $successCount ملف بنجاح إلى التلجرام!")
+                snackbarHostState.showSnackbar("تم تشفير ورفع $successCount ملف بنجاح إلى التلجرام!")
             }
+        }
+    }
+
+    fun handleDownloadFile(file: UploadedFile) {
+        if (!settings.isConfigured) {
+            scope.launch {
+                snackbarHostState.showSnackbar("الرجاء إعداد بيانات التلجرام (Bot Token) أولاً من قائمة Menu.")
+            }
+            currentTab = NavigationTab.MENU
+            return
+        }
+
+        scope.launch {
+            isUploading = true
+            currentUploadingFileName = "تنزيل وفك تشفير: ${file.name}"
+            uploadProgress = 0f
+
+            val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: File(context.filesDir, "downloads").apply { mkdirs() }
+            var destFile = File(downloadsDir, file.name)
+            if (destFile.exists()) {
+                destFile = File(downloadsDir, "${System.currentTimeMillis()}_${file.name}")
+            }
+
+            val result = telegramUploader.downloadAndDecryptFile(
+                uploadedFile = file,
+                settings = settings,
+                destinationFile = destFile,
+                onProgress = { progress ->
+                    uploadProgress = progress
+                }
+            )
+
+            isUploading = false
+
+            result.onSuccess { downloadedFile ->
+                val savedRecord = DownloadedFile(
+                    name = file.name,
+                    mimeType = file.mimeType,
+                    size = downloadedFile.length(),
+                    localPath = downloadedFile.absolutePath,
+                    telegramFileId = file.telegramFileId
+                )
+                downloadedFileRepository.saveDownloadedFile(savedRecord)
+                refreshDownloadedFiles()
+
+                scope.launch {
+                    snackbarHostState.showSnackbar("تم تنزيل وفك تشفير الملف وحفظه بنجاح!")
+                }
+
+                try {
+                    val fileUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.provider",
+                        downloadedFile
+                    )
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(fileUri, file.mimeType.ifBlank { "*/*" })
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                    Toast.makeText(context, "تم حفظ الملف في: ${downloadedFile.absolutePath}", Toast.LENGTH_LONG).show()
+                }
+            }.onFailure { error ->
+                Toast.makeText(context, "خطأ في تنزيل وفك تشفير الملف: ${error.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun handleOpenDownloadedFile(file: DownloadedFile) {
+        try {
+            val physicalFile = File(file.localPath)
+            if (!physicalFile.exists()) {
+                Toast.makeText(context, "الملف غير موجود على الجهاز", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val fileUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider",
+                physicalFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(fileUri, file.mimeType.ifBlank { "*/*" })
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(context, "لم يتم العثور على تطبيق لفتح هذا الملف", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun handleShareDownloadedFile(file: DownloadedFile) {
+        try {
+            val physicalFile = File(file.localPath)
+            if (!physicalFile.exists()) {
+                Toast.makeText(context, "الملف غير موجود على الجهاز", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val fileUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider",
+                physicalFile
+            )
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = file.mimeType.ifBlank { "*/*" }
+                putExtra(Intent.EXTRA_STREAM, fileUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "مشاركة الملف"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "فشل مشاركة الملف: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -222,12 +353,31 @@ fun MainScreen() {
                             FilesTabContent(
                                 searchQuery = searchQuery,
                                 files = uploadedFiles,
+                                onDownloadFile = { file ->
+                                    handleDownloadFile(file)
+                                },
                                 onDeleteFile = { id ->
                                     fileRepository.deleteFile(id)
                                     refreshFiles()
                                 },
                                 onUploadClick = {
                                     filePickerLauncher.launch("*/*")
+                                }
+                            )
+                        }
+                        NavigationTab.DOWNLOADS -> {
+                            DownloadsTabContent(
+                                searchQuery = searchQuery,
+                                downloadedFiles = downloadedFiles,
+                                onOpenFile = { file ->
+                                    handleOpenDownloadedFile(file)
+                                },
+                                onShareFile = { file ->
+                                    handleShareDownloadedFile(file)
+                                },
+                                onDeleteFile = { id ->
+                                    downloadedFileRepository.deleteDownloadedFile(id)
+                                    refreshDownloadedFiles()
                                 }
                             )
                         }

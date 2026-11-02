@@ -8,9 +8,11 @@ class SettingsRepository(context: Context) {
     fun getSettings(): Settings {
         val token = prefs.getString("bot_token", "") ?: ""
         val chatId = prefs.getString("chat_id", "") ?: ""
+        val password = prefs.getString("encryption_password", "") ?: ""
         return Settings(
             botToken = token,
             chatId = chatId,
+            encryptionPassword = password,
             isConfigured = token.isNotBlank() && chatId.isNotBlank()
         )
     }
@@ -19,6 +21,7 @@ class SettingsRepository(context: Context) {
         prefs.edit()
             .putString("bot_token", settings.botToken)
             .putString("chat_id", settings.chatId)
+            .putString("encryption_password", settings.encryptionPassword)
             .apply()
     }
 }

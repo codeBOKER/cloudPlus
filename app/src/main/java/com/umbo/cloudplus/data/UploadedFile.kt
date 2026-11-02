@@ -8,5 +8,6 @@ data class UploadedFile(
     val mimeType: String,
     val size: Long,
     val uploadDate: Long = System.currentTimeMillis(),
-    val telegramFileId: String = ""
+    val telegramFileId: String = "",
+    val isEncrypted: Boolean = true
 )

@@ -5,11 +5,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.umbo.cloudplus.data.UploadedFile
 import java.text.SimpleDateFormat
@@ -19,6 +22,7 @@ import java.util.*
 fun FilesTabContent(
     searchQuery: String,
     files: List<UploadedFile>,
+    onDownloadFile: (UploadedFile) -> Unit,
     onDeleteFile: (String) -> Unit,
     onUploadClick: () -> Unit
 ) {
@@ -64,7 +68,11 @@ fun FilesTabContent(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(filteredFiles, key = { it.id }) { file ->
-                FileItemCard(file = file, onDelete = { onDeleteFile(file.id) })
+                FileItemCard(
+                    file = file,
+                    onDownload = { onDownloadFile(file) },
+                    onDelete = { onDeleteFile(file.id) }
+                )
             }
         }
     }
@@ -73,6 +81,7 @@ fun FilesTabContent(
 @Composable
 fun FileItemCard(
     file: UploadedFile,
+    onDownload: () -> Unit,
     onDelete: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
@@ -94,20 +103,43 @@ fun FileItemCard(
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(40.dp)
             )
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             Column(
                 modifier = Modifier.weight(1f)
             ) {
-                Text(
-                    text = file.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = file.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (file.isEncrypted) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Encrypted",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "$formattedSize • $formattedDate",
+                    text = "$formattedSize • $formattedDate" + if (file.isEncrypted) " • Encrypted AES-256" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(onClick = onDownload) {
+                Icon(
+                    imageVector = Icons.Default.Download,
+                    contentDescription = "Download & Decrypt",
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
             IconButton(onClick = onDelete) {
