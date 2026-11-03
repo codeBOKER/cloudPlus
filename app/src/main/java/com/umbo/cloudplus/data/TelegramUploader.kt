@@ -4,10 +4,12 @@ import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 class TelegramUploader(private val context: Context) {
 
@@ -96,38 +98,72 @@ class TelegramUploader(private val context: Context) {
                 )
                 Result.success(uploadedFile)
             } else {
-                val errorStream = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
+                val errorStream = connection.errorStream?.bufferedReader()?.use { it.readText() }
                 tempFile.delete()
-                Result.failure(Exception("Telegram API error ($responseCode): $errorStream"))
+                Result.failure(Exception(formatTelegramError(errorStream, responseCode)))
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun testConnection(settings: Settings): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun testConnection(settings: Settings): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
             val token = sanitizeToken(settings.botToken)
             val chatId = settings.chatId.trim()
 
             if (token.isBlank() || chatId.isBlank()) {
-                return@withContext Result.failure(Exception("Bot Token and Chat ID cannot be empty"))
+                return@withContext Result.failure(Exception("رمز البوت (Bot Token) أو معرف الدردشة (Chat ID) فارغ."))
             }
-            val urlStr = "https://api.telegram.org/bot$token/getMe"
-            val url = URL(urlStr)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 5000
+
+            val getMeUrl = URL("https://api.telegram.org/bot$token/getMe")
+            val getMeConn = getMeUrl.openConnection() as HttpURLConnection
+            getMeConn.requestMethod = "GET"
+            getMeConn.connectTimeout = 10000
+            getMeConn.readTimeout = 10000
+
+            if (getMeConn.responseCode != 200) {
+                val errorStr = getMeConn.errorStream?.bufferedReader()?.use { it.readText() }
+                return@withContext Result.failure(Exception(formatTelegramError(errorStr, getMeConn.responseCode)))
             }
-            val responseCode = connection.responseCode
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                Result.success(Unit)
+
+            val encodedChatId = URLEncoder.encode(chatId, "UTF-8")
+            val getChatUrl = URL("https://api.telegram.org/bot$token/getChat?chat_id=$encodedChatId")
+            val getChatConn = getChatUrl.openConnection() as HttpURLConnection
+            getChatConn.requestMethod = "GET"
+            getChatConn.connectTimeout = 10000
+            getChatConn.readTimeout = 10000
+
+            if (getChatConn.responseCode == 200) {
+                Result.success(true)
             } else {
-                Result.failure(Exception("Invalid Bot Token (HTTP $responseCode)"))
+                val errorStr = getChatConn.errorStream?.bufferedReader()?.use { it.readText() }
+                Result.failure(Exception(formatTelegramError(errorStr, getChatConn.responseCode)))
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private fun formatTelegramError(errorJson: String?, httpCode: Int): String {
+        if (errorJson.isNullOrBlank()) {
+            return "HTTP Error $httpCode"
+        }
+        try {
+            val json = JSONObject(errorJson)
+            val desc = json.optString("description", "")
+            return when {
+                desc.contains("chat not found", ignoreCase = true) ->
+                    "لم يتم العثور على Chat ID ($httpCode).\n• للمحادثة الشخصية: أرسل /start للبوت أولاً.\n• للقنوات: أضف البوت كأدمن وتأكد أن ID يبدأ بـ -100."
+                desc.contains("Unauthorized", ignoreCase = true) ->
+                    "رمز البوت (Bot Token) غير صحيح."
+                desc.isNotBlank() ->
+                    "خطأ التلجرام ($httpCode): $desc"
+                else ->
+                    "HTTP Error $httpCode"
+            }
+        } catch (_: Exception) {
+            return "HTTP Error $httpCode: $errorJson"
         }
     }
 }
