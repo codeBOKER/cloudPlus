@@ -1,5 +1,6 @@
 package com.umbo.cloudplus.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Error
@@ -31,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,6 +48,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.umbo.cloudplus.data.Settings
 import com.umbo.cloudplus.ui.components.PasscodeSetupDialog
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun MenuTabContent(
@@ -53,6 +59,7 @@ fun MenuTabContent(
     onTestConnection: (Settings, (Result<Boolean>) -> Unit) -> Unit,
     onSetPasscode: (String) -> Unit,
     onRemovePasscode: () -> Unit,
+    onRunWhatsAppBackupNow: () -> Unit,
     totalFilesCount: Int,
     modifier: Modifier = Modifier
 ) {
@@ -97,6 +104,128 @@ fun MenuTabContent(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // WhatsApp & Media Auto-Backup Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Backup,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "النسخ الاحتياطي التلقائي للواتساب والوسائط",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "تفعيل النسخ الاحتياطي للصور والفيديو",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (settings.isWhatsAppBackupEnabled) "مفعّل تلقائياً في الخلفية" else "معطّل",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.isWhatsAppBackupEnabled,
+                        onCheckedChange = { isChecked ->
+                            val updated = settings.copy(isWhatsAppBackupEnabled = isChecked)
+                            onSaveSettings(updated)
+                        }
+                    )
+                }
+
+                if (settings.isWhatsAppBackupEnabled) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "فترة التكرار التلقائي للنسخ الاحتياطي:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    val intervals = listOf(
+                        1 to "كل شهر (Monthly)",
+                        3 to "كل 3 أشهر (كل quarter - افتراضي)",
+                        6 to "كل 6 أشهر (Semi-annual)"
+                    )
+
+                    Column {
+                        intervals.forEach { (months, label) ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val updated = settings.copy(backupIntervalMonths = months)
+                                        onSaveSettings(updated)
+                                    }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                RadioButton(
+                                    selected = (settings.backupIntervalMonths == months),
+                                    onClick = {
+                                        val updated = settings.copy(backupIntervalMonths = months)
+                                        onSaveSettings(updated)
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val lastBackupText = if (settings.lastBackupTimestamp > 0L) {
+                        val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                        "آخر نسخ احتياطي: " + sdf.format(Date(settings.lastBackupTimestamp))
+                    } else {
+                        "لم يتم إجراء نسخ احتياطي تلقائي بعد"
+                    }
+
+                    Text(
+                        text = lastBackupText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = onRunWhatsAppBackupNow,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Backup, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("بدء النسخ الاحتياطي الآن")
+                    }
+                }
             }
         }
 

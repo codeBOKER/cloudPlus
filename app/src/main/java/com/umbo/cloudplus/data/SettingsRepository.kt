@@ -18,13 +18,20 @@ class SettingsRepository(context: Context) {
         val passcodeSalt = prefs.getString("passcode_salt", "") ?: ""
         val isScreenSecurityEnabled = prefs.getBoolean("is_screen_security_enabled", false)
 
+        val isWhatsAppBackupEnabled = prefs.getBoolean("is_whatsapp_backup_enabled", false)
+        val backupIntervalMonths = prefs.getInt("backup_interval_months", 3)
+        val lastBackupTimestamp = prefs.getLong("last_backup_timestamp", 0L)
+
         return Settings(
             botToken = token,
             chatId = chatId,
             isAppLockEnabled = isAppLockEnabled,
             passcodeHash = passcodeHash,
             passcodeSalt = passcodeSalt,
-            isScreenSecurityEnabled = isScreenSecurityEnabled
+            isScreenSecurityEnabled = isScreenSecurityEnabled,
+            isWhatsAppBackupEnabled = isWhatsAppBackupEnabled,
+            backupIntervalMonths = backupIntervalMonths,
+            lastBackupTimestamp = lastBackupTimestamp
         )
     }
 
@@ -39,7 +46,15 @@ class SettingsRepository(context: Context) {
             .putString("passcode_hash", settings.passcodeHash)
             .putString("passcode_salt", settings.passcodeSalt)
             .putBoolean("is_screen_security_enabled", settings.isScreenSecurityEnabled)
+            .putBoolean("is_whatsapp_backup_enabled", settings.isWhatsAppBackupEnabled)
+            .putInt("backup_interval_months", settings.backupIntervalMonths)
+            .putLong("last_backup_timestamp", settings.lastBackupTimestamp)
             .apply()
+    }
+
+    fun updateLastBackupTime(timestamp: Long = System.currentTimeMillis()) {
+        val current = getSettings()
+        saveSettings(current.copy(lastBackupTimestamp = timestamp))
     }
 
     fun setPasscode(pin: String): Settings {

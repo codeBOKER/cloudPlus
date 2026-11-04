@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.umbo.cloudplus.data.FileRepository
 import com.umbo.cloudplus.data.SettingsRepository
 import com.umbo.cloudplus.data.TelegramUploader
+import com.umbo.cloudplus.data.WhatsAppBackupScheduler
 import com.umbo.cloudplus.ui.components.BottomNavigationBar
 import com.umbo.cloudplus.ui.components.TopSearchBar
 import com.umbo.cloudplus.ui.components.UploadFloatingActionButton
@@ -101,6 +102,11 @@ fun MainScreen() {
     var isUploading by remember { mutableStateOf(false) }
     var currentUploadingFileName by remember { mutableStateOf("") }
     var uploadProgress by remember { mutableFloatStateOf(0f) }
+
+    // Synchronize WhatsApp Backup Schedule whenever settings change
+    LaunchedEffect(settings.isWhatsAppBackupEnabled, settings.backupIntervalMonths, settings.isConfigured) {
+        WhatsAppBackupScheduler.updateBackupSchedule(context, settings)
+    }
 
     // Dynamic FLAG_SECURE window flag management
     LaunchedEffect(settings.isScreenSecurityEnabled) {
@@ -276,6 +282,18 @@ fun MainScreen() {
                                         isAppLocked = false
                                         scope.launch {
                                             snackbarHostState.showSnackbar("تم إلغاء قفل التطبيق.")
+                                        }
+                                    },
+                                    onRunWhatsAppBackupNow = {
+                                        if (!settings.isConfigured) {
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar("يرجى إعداد بيانات التلجرام أولاً.")
+                                            }
+                                        } else {
+                                            WhatsAppBackupScheduler.runImmediateBackup(context)
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar("تم بدء النسخ الاحتياطي لوسائط الواتساب في الخلفية!")
+                                            }
                                         }
                                     },
                                     totalFilesCount = uploadedFiles.size
