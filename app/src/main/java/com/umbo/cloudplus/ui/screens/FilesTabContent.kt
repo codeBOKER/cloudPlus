@@ -18,19 +18,33 @@ import com.umbo.cloudplus.data.UploadedFile
 import java.text.SimpleDateFormat
 import java.util.*
 
+import androidx.compose.material.icons.filled.AutoAwesome
+
 @Composable
 fun FilesTabContent(
     searchQuery: String,
     files: List<UploadedFile>,
+    vectorScores: Map<String, Float> = emptyMap(),
+    isVectorSearching: Boolean = false,
     onDownloadFile: (UploadedFile) -> Unit,
     onDeleteFile: (String) -> Unit,
     onUploadClick: () -> Unit
 ) {
-    val filteredFiles = remember(searchQuery, files) {
+    val filteredFiles = remember(searchQuery, files, vectorScores) {
         if (searchQuery.isBlank()) {
             files
+        } else if (vectorScores.isNotEmpty()) {
+            // Sort all files by vector similarity score descending so description search always shows ranked results
+            files.sortedByDescending { file ->
+                val score = vectorScores[file.id] ?: 0f
+                val nameMatchBonus = if (file.name.contains(searchQuery, ignoreCase = true)) 1.0f else 0.0f
+                score + nameMatchBonus
+            }
         } else {
-            files.filter { it.name.contains(searchQuery, ignoreCase = true) }
+            files.filter { file ->
+                file.name.contains(searchQuery, ignoreCase = true) ||
+                file.mimeType.contains(searchQuery, ignoreCase = true)
+            }
         }
     }
 
@@ -44,35 +58,74 @@ fun FilesTabContent(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.padding(32.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.InsertDriveFile,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = if (searchQuery.isBlank()) "لا توجد ملفات مرفوعة بعد" else "لا توجد نتائج مطابقة لـ \"$searchQuery\"",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                if (searchQuery.isBlank()) {
-                    Button(onClick = onUploadClick) {
-                        Text("رفع ملف الآن")
+                if (isVectorSearching) {
+                    CircularProgressIndicator()
+                    Text("جاري البحث باستخدام Jina Vector Search...")
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.InsertDriveFile,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = if (searchQuery.isBlank()) "لا توجد ملفات مرفوعة بعد" else "لا توجد نتائج مطابقة لـ \"$searchQuery\"",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    if (searchQuery.isBlank()) {
+                        Button(onClick = onUploadClick) {
+                            Text("رفع ملف الآن")
+                        }
                     }
                 }
             }
         }
     } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(filteredFiles, key = { it.id }) { file ->
-                FileItemCard(
-                    file = file,
-                    onDownload = { onDownloadFile(file) },
-                    onDelete = { onDeleteFile(file.id) }
-                )
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (isVectorSearching) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            if (searchQuery.isNotBlank() && vectorScores.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "تم تطبيق Jina Vector Search (البحث بالمعنى والتشابه التضميني)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(filteredFiles, key = { it.id }) { file ->
+                    val similarityScore = vectorScores[file.id]
+                    FileItemCard(
+                        file = file,
+                        similarityScore = similarityScore,
+                        onDownload = { onDownloadFile(file) },
+                        onDelete = { onDeleteFile(file.id) }
+                    )
+                }
             }
         }
     }
@@ -81,6 +134,7 @@ fun FilesTabContent(
 @Composable
 fun FileItemCard(
     file: UploadedFile,
+    similarityScore: Float? = null,
     onDownload: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -126,10 +180,24 @@ fun FileItemCard(
                             modifier = Modifier.size(16.dp)
                         )
                     }
+                    if (similarityScore != null && similarityScore > 0f) {
+                        AssistChip(
+                            onClick = { },
+                            label = {
+                                Text(
+                                    text = "⚡ ${(similarityScore * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            modifier = Modifier.height(24.dp)
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "$formattedSize • $formattedDate" + if (file.isEncrypted) " • Encrypted AES-256" else "",
+                    text = "$formattedSize • $formattedDate" +
+                            if (file.isEncrypted) " • Encrypted AES-256" else "" +
+                            if (file.vector != null) " • Vector Indexed" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

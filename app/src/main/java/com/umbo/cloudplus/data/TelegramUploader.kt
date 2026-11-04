@@ -11,16 +11,23 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class TelegramUploader(private val context: Context) {
+    private val jinaVectorManager = JinaVectorManager(context)
 
     private fun sanitizeToken(token: String): String {
         var cleaned = token.trim()
-        if (cleaned.startsWith("https://api.telegram.org/bot", ignoreCase = true)) {
-            cleaned = cleaned.removePrefix("https://api.telegram.org/bot")
-        } else if (cleaned.startsWith("api.telegram.org/bot", ignoreCase = true)) {
-            cleaned = cleaned.removePrefix("api.telegram.org/bot")
+        val prefixes = listOf(
+            "https://api.telegram.org/bot",
+            "http://api.telegram.org/bot",
+            "api.telegram.org/bot"
+        )
+        for (prefix in prefixes) {
+            if (cleaned.startsWith(prefix, ignoreCase = true)) {
+                cleaned = cleaned.substring(prefix.length)
+                break
+            }
         }
-        if (cleaned.startsWith("bot", ignoreCase = true)) {
-            cleaned = cleaned.removePrefix("bot")
+        if (cleaned.startsWith("bot", ignoreCase = true) && cleaned.length > 3 && cleaned[3].isDigit()) {
+            cleaned = cleaned.substring(3)
         }
         return cleaned.trim()
     }
@@ -41,6 +48,13 @@ class TelegramUploader(private val context: Context) {
 
             if (token.isBlank() || chatId.isBlank()) {
                 return@withContext Result.failure(Exception("لم يتم ضبط Telegram Bot Token أو Chat ID في الإعدادات"))
+            }
+
+            val maxTelegramSize = 50 * 1024 * 1024L
+            if (fileSize > maxTelegramSize) {
+                return@withContext Result.failure(
+                    Exception("حجم الملف ($fileName) يتجاوز الحد الأقصى المسموح به لـ Telegram Bot API (50 ميجابايت).")
+                )
             }
 
             // Step 1: Copy from Uri to plain temp file
@@ -85,8 +99,9 @@ class TelegramUploader(private val context: Context) {
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
-                connectTimeout = 15000
-                readTimeout = 60000
+                connectTimeout = 20000
+                readTimeout = 120000
+                setChunkedStreamingMode(0)
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
             }
 
@@ -132,10 +147,31 @@ class TelegramUploader(private val context: Context) {
                         val docObj = resultObj?.optJSONObject("document")
                             ?: resultObj?.optJSONObject("video")
                             ?: resultObj?.optJSONObject("audio")
+                            ?: resultObj?.optJSONObject("animation")
+                            ?: resultObj?.optJSONObject("voice")
                         telegramFileId = docObj?.optString("file_id", "") ?: ""
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
+                }
+
+                if (telegramFileId.isBlank()) {
+                    return@withContext Result.failure(Exception("لم يتم العثور على معرف الملف (file_id) في استجابة التلجرام"))
+                }
+
+                var vectorEmbedding: List<Float>? = null
+                if (settings.isJinaConfigured) {
+                    try {
+                        val textContent = jinaVectorManager.extractTextFromFile(uri, fileName, mimeType)
+                        val jinaRes = jinaVectorManager.getEmbedding(
+                            text = textContent,
+                            apiKey = settings.jinaApiKey,
+                            task = "retrieval.passage"
+                        )
+                        vectorEmbedding = jinaRes.getOrNull()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
 
                 val uploadedFile = UploadedFile(
@@ -143,12 +179,18 @@ class TelegramUploader(private val context: Context) {
                     mimeType = mimeType,
                     size = fileSize,
                     telegramFileId = telegramFileId,
-                    isEncrypted = true
+                    isEncrypted = true,
+                    vector = vectorEmbedding
                 )
                 onProgress(1f)
                 Result.success(uploadedFile)
             } else {
-                Result.failure(Exception("خطأ في Telegram API ($responseCode): $responseText"))
+                var errorDetail = responseText
+                try {
+                    val json = JSONObject(responseText)
+                    errorDetail = json.optString("description", responseText)
+                } catch (_: Exception) {}
+                Result.failure(Exception("خطأ في Telegram API ($responseCode): $errorDetail"))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -174,6 +216,8 @@ class TelegramUploader(private val context: Context) {
                 return@withContext Result.failure(Exception("معرف الملف على التلجرام غير متوفر (File ID missing)"))
             }
 
+            destinationFile.parentFile?.mkdirs()
+
             onProgress(0.05f)
 
             // Step 1: getFile API to get file_path from Telegram
@@ -186,8 +230,13 @@ class TelegramUploader(private val context: Context) {
 
             val getFileCode = getFileConn.responseCode
             if (getFileCode != HttpURLConnection.HTTP_OK) {
-                val err = getFileConn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $getFileCode"
-                return@withContext Result.failure(Exception("فشل الحصول على معلومات الملف من تلجرام: $err"))
+                val errText = getFileConn.errorStream?.bufferedReader()?.use { it.readText() } ?: "HTTP $getFileCode"
+                var detail = errText
+                try {
+                    val json = JSONObject(errText)
+                    detail = json.optString("description", errText)
+                } catch (_: Exception) {}
+                return@withContext Result.failure(Exception("فشل الحصول على معلومات الملف من تلجرام: $detail"))
             }
 
             val getFileResponseBody = getFileConn.inputStream.bufferedReader().use { it.readText() }
@@ -208,7 +257,7 @@ class TelegramUploader(private val context: Context) {
             val downloadConn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 15000
-                readTimeout = 60000
+                readTimeout = 120000
             }
 
             val downloadCode = downloadConn.responseCode
@@ -267,19 +316,42 @@ class TelegramUploader(private val context: Context) {
             if (token.isBlank() || chatId.isBlank()) {
                 return@withContext Result.failure(Exception("Bot Token and Chat ID cannot be empty"))
             }
-            val urlStr = "https://api.telegram.org/bot$token/getMe"
-            val url = URL(urlStr)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
+
+            // 1. Verify Bot Token
+            val getMeUrl = "https://api.telegram.org/bot$token/getMe"
+            val meConn = (URL(getMeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 8000
+                readTimeout = 8000
             }
-            val responseCode = connection.responseCode
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Invalid Bot Token (HTTP $responseCode)"))
+            if (meConn.responseCode != HttpURLConnection.HTTP_OK) {
+                val errText = meConn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                var detail = "Invalid Bot Token (HTTP ${meConn.responseCode})"
+                try {
+                    val json = JSONObject(errText)
+                    detail = json.optString("description", detail)
+                } catch (_: Exception) {}
+                return@withContext Result.failure(Exception(detail))
             }
+
+            // 2. Verify Chat ID access
+            val getChatUrl = "https://api.telegram.org/bot$token/getChat?chat_id=$chatId"
+            val chatConn = (URL(getChatUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+            }
+            if (chatConn.responseCode != HttpURLConnection.HTTP_OK) {
+                val errText = chatConn.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                var detail = "Chat ID error (HTTP ${chatConn.responseCode})"
+                try {
+                    val json = JSONObject(errText)
+                    detail = json.optString("description", detail)
+                } catch (_: Exception) {}
+                return@withContext Result.failure(Exception("Bot cannot access Chat ID: $detail"))
+            }
+
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }

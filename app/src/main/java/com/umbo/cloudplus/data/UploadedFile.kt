@@ -9,5 +9,6 @@ data class UploadedFile(
     val size: Long,
     val uploadDate: Long = System.currentTimeMillis(),
     val telegramFileId: String = "",
-    val isEncrypted: Boolean = true
+    val isEncrypted: Boolean = true,
+    val vector: List<Float>? = null
 )
