@@ -270,11 +270,13 @@ fun MainScreen() {
             currentUploadingFileName = "تنزيل وفك تشفير: ${file.name}"
             uploadProgress = 0f
 
-            val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                ?: File(context.filesDir, "downloads").apply { mkdirs() }
-            var destFile = File(downloadsDir, file.name)
+            val publicDownloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!publicDownloadsDir.exists()) {
+                publicDownloadsDir.mkdirs()
+            }
+            var destFile = File(publicDownloadsDir, file.name)
             if (destFile.exists()) {
-                destFile = File(downloadsDir, "${System.currentTimeMillis()}_${file.name}")
+                destFile = File(publicDownloadsDir, "${System.currentTimeMillis()}_${file.name}")
             }
 
             val result = telegramUploader.downloadAndDecryptFile(
@@ -289,6 +291,15 @@ fun MainScreen() {
             isUploading = false
 
             result.onSuccess { downloadedFile ->
+                try {
+                    android.media.MediaScannerConnection.scanFile(
+                        context,
+                        arrayOf(downloadedFile.absolutePath),
+                        arrayOf(file.mimeType.ifBlank { "*/*" }),
+                        null
+                    )
+                } catch (_: Exception) {}
+
                 val savedRecord = DownloadedFile(
                     name = file.name,
                     mimeType = file.mimeType,
@@ -300,7 +311,7 @@ fun MainScreen() {
                 refreshDownloadedFiles()
 
                 scope.launch {
-                    snackbarHostState.showSnackbar("تم تنزيل وفك تشفير الملف وحفظه بنجاح!")
+                    snackbarHostState.showSnackbar("تم التنزيل وحفظ الملف في التنزيلات بنجاح!")
                 }
 
                 try {
