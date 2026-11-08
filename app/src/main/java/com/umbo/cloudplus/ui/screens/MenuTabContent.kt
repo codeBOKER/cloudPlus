@@ -3,10 +3,14 @@ package com.umbo.cloudplus.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -15,6 +19,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +39,7 @@ fun MenuTabContent(
     settings: Settings,
     onSaveSettings: (Settings) -> Unit,
     onTestConnection: (Settings, (Result<Unit>) -> Unit) -> Unit,
+    onReopenOnboarding: () -> Unit,
     totalFilesCount: Int
 ) {
     var botToken by remember(settings.botToken) { mutableStateOf(settings.botToken) }
@@ -177,6 +183,40 @@ fun MenuTabContent(
                     ) {
                         Text(if (isTesting) "Testing..." else "Test Connection")
                     }
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "دليل الاستخدام (App Guide)",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "أعد مشاهدة الشرح التفاعلي لطريقة استخدام التطبيق وتشفير الملفات.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onReopenOnboarding,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text("عرض شرح استخدام التطبيق")
                 }
             }
         }
