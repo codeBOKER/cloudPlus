@@ -16,6 +16,15 @@ class FileRepository(context: Context) {
             val jsonArray = JSONArray(jsonString)
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
+                val vectorArray = obj.optJSONArray("vector")
+                val vectorList = if (vectorArray != null) {
+                    val v = mutableListOf<Float>()
+                    for (j in 0 until vectorArray.length()) {
+                        v.add(vectorArray.getDouble(j).toFloat())
+                    }
+                    v
+                } else null
+
                 list.add(
                     UploadedFile(
                         id = obj.optString("id", UUID.randomUUID().toString()),
@@ -24,7 +33,8 @@ class FileRepository(context: Context) {
                         size = obj.optLong("size", 0L),
                         uploadDate = obj.optLong("uploadDate", System.currentTimeMillis()),
                         telegramFileId = obj.optString("telegramFileId", ""),
-                        isEncrypted = obj.optBoolean("isEncrypted", true)
+                        isEncrypted = obj.optBoolean("isEncrypted", true),
+                        vector = vectorList
                     )
                 )
             }
@@ -36,7 +46,12 @@ class FileRepository(context: Context) {
 
     fun saveFile(file: UploadedFile) {
         val current = getUploadedFiles().toMutableList()
-        current.add(0, file)
+        val existingIndex = current.indexOfFirst { it.id == file.id }
+        if (existingIndex >= 0) {
+            current[existingIndex] = file
+        } else {
+            current.add(0, file)
+        }
         saveList(current)
     }
 
@@ -57,6 +72,11 @@ class FileRepository(context: Context) {
                 put("uploadDate", file.uploadDate)
                 put("telegramFileId", file.telegramFileId)
                 put("isEncrypted", file.isEncrypted)
+                if (file.vector != null) {
+                    val vecArray = JSONArray()
+                    file.vector.forEach { vecArray.put(it.toDouble()) }
+                    put("vector", vecArray)
+                }
             }
             jsonArray.put(obj)
         }
