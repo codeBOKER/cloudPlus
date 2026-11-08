@@ -12,6 +12,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,6 +52,7 @@ import androidx.core.content.FileProvider
 import com.umbo.cloudplus.data.DownloadedFile
 import com.umbo.cloudplus.data.DownloadedFileRepository
 import com.umbo.cloudplus.data.FileRepository
+import com.umbo.cloudplus.data.OnboardingRepository
 import com.umbo.cloudplus.data.SettingsRepository
 import com.umbo.cloudplus.data.TelegramUploader
 import com.umbo.cloudplus.data.UploadedFile
@@ -59,6 +64,8 @@ import com.umbo.cloudplus.ui.screens.DownloadsTabContent
 import com.umbo.cloudplus.ui.screens.FilesTabContent
 import com.umbo.cloudplus.ui.screens.GalleryTabContent
 import com.umbo.cloudplus.ui.screens.MenuTabContent
+import com.umbo.cloudplus.ui.screens.OnboardingScreen
+import com.umbo.cloudplus.ui.screens.SplashScreen
 import com.umbo.cloudplus.ui.theme.cloudPlusTheme
 import kotlinx.coroutines.launch
 import java.io.File
@@ -69,11 +76,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             cloudPlusTheme {
-                MainScreen()
+                AppRootScreenHost()
             }
         }
     }
 }
+
+enum class AppRootState { SPLASH, ONBOARDING, MAIN }
 
 enum class NavigationTab(val title: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector) {
     MENU("Menu", Icons.Filled.Menu, Icons.Outlined.Menu),
@@ -83,7 +92,53 @@ enum class NavigationTab(val title: String, val selectedIcon: ImageVector, val u
 }
 
 @Composable
-fun MainScreen() {
+fun AppRootScreenHost() {
+    val context = LocalContext.current
+    val onboardingRepository = remember { OnboardingRepository(context) }
+    var rootState by remember { mutableStateOf(AppRootState.SPLASH) }
+
+    AnimatedContent(
+        targetState = rootState,
+        transitionSpec = {
+            fadeIn() togetherWith fadeOut()
+        },
+        label = "AppRootTransition"
+    ) { state ->
+        when (state) {
+            AppRootState.SPLASH -> {
+                SplashScreen(
+                    onSplashFinished = {
+                        if (onboardingRepository.isFirstLaunch()) {
+                            rootState = AppRootState.ONBOARDING
+                        } else {
+                            rootState = AppRootState.MAIN
+                        }
+                    }
+                )
+            }
+            AppRootState.ONBOARDING -> {
+                OnboardingScreen(
+                    onFinishOnboarding = {
+                        onboardingRepository.setFirstLaunchCompleted()
+                        rootState = AppRootState.MAIN
+                    }
+                )
+            }
+            AppRootState.MAIN -> {
+                MainScreen(
+                    onReopenOnboarding = {
+                        rootState = AppRootState.ONBOARDING
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MainScreen(
+    onReopenOnboarding: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -346,6 +401,7 @@ fun MainScreen() {
                                         onResult(result)
                                     }
                                 },
+                                onReopenOnboarding = onReopenOnboarding,
                                 totalFilesCount = uploadedFiles.size
                             )
                         }
