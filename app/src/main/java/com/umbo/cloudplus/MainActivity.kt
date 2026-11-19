@@ -1,11 +1,14 @@
 package com.umbo.cloudplus
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.OpenableColumns
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -33,6 +36,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -45,7 +50,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
-import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.umbo.cloudplus.data.DownloadedFile
 import com.umbo.cloudplus.data.DownloadedFileRepository
 import com.umbo.cloudplus.data.FileRepository
@@ -53,15 +60,18 @@ import com.umbo.cloudplus.data.JinaVectorManager
 import com.umbo.cloudplus.data.SettingsRepository
 import com.umbo.cloudplus.data.TelegramUploader
 import com.umbo.cloudplus.data.UploadedFile
+import com.umbo.cloudplus.data.WhatsAppBackupScheduler
 import com.umbo.cloudplus.ui.components.BottomNavigationBar
 import com.umbo.cloudplus.ui.components.TopSearchBar
 import com.umbo.cloudplus.ui.components.UploadFloatingActionButton
 import com.umbo.cloudplus.ui.components.UploadProgressBar
+import com.umbo.cloudplus.ui.screens.AppLockScreen
 import com.umbo.cloudplus.ui.screens.DownloadsTabContent
 import com.umbo.cloudplus.ui.screens.FilesTabContent
 import com.umbo.cloudplus.ui.screens.GalleryTabContent
 import com.umbo.cloudplus.ui.screens.MenuTabContent
 import com.umbo.cloudplus.ui.theme.cloudPlusTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -87,6 +97,7 @@ enum class NavigationTab(val title: String, val selectedIcon: ImageVector, val u
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
+    val activity = context as? Activity
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -103,12 +114,46 @@ fun MainScreen() {
     var uploadedFiles by remember { mutableStateOf(fileRepository.getUploadedFiles()) }
     var downloadedFiles by remember { mutableStateOf(downloadedFileRepository.getDownloadedFiles()) }
 
+    var isAppLocked by remember { mutableStateOf(settings.isAppLockEnabled) }
+
     var vectorScores by remember { mutableStateOf<Map<String, Float>>(emptyMap()) }
     var isVectorSearching by remember { mutableStateOf(false) }
 
     var isUploading by remember { mutableStateOf(false) }
     var currentUploadingFileName by remember { mutableStateOf("") }
     var uploadProgress by remember { mutableFloatStateOf(0f) }
+
+    // Synchronize WhatsApp Backup Schedule whenever settings change
+    LaunchedEffect(settings.isWhatsAppBackupEnabled, settings.backupIntervalMonths, settings.isConfigured) {
+        WhatsAppBackupScheduler.updateBackupSchedule(context, settings)
+    }
+
+    // Dynamic FLAG_SECURE window flag management
+    LaunchedEffect(settings.isScreenSecurityEnabled) {
+        activity?.let { act ->
+            if (settings.isScreenSecurityEnabled) {
+                act.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            } else {
+                act.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
+    }
+
+    // Auto-lock when app goes to background
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (settings.isAppLockEnabled) {
+                    isAppLocked = true
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     LaunchedEffect(searchQuery, settings.jinaApiKey, uploadedFiles) {
         val trimmedQuery = searchQuery.trim()
@@ -124,10 +169,8 @@ fun MainScreen() {
             return@LaunchedEffect
         }
 
-        // Debounce typing by 300ms
-        kotlinx.coroutines.delay(300)
+        delay(300)
 
-        // Ensure all files have vectors generated on-the-fly
         val missingVectorFiles = uploadedFiles.filter { it.vector.isNullOrEmpty() }
         if (missingVectorFiles.isNotEmpty()) {
             isVectorSearching = true
@@ -292,7 +335,7 @@ fun MainScreen() {
 
             result.onSuccess { downloadedFile ->
                 try {
-                    android.media.MediaScannerConnection.scanFile(
+                    MediaScannerConnection.scanFile(
                         context,
                         arrayOf(downloadedFile.absolutePath),
                         arrayOf(file.mimeType.ifBlank { "*/*" }),
@@ -393,128 +436,166 @@ fun MainScreen() {
         handleUploadUris(uris)
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                TopSearchBar(
-                    query = searchQuery,
-                    onQueryChange = { newQuery ->
-                        searchQuery = newQuery
-                        if (newQuery.isNotBlank() && currentTab != NavigationTab.FILES) {
-                            currentTab = NavigationTab.FILES
-                        }
-                    },
-                    placeholder = if (settings.isJinaConfigured) "⚡ Jina Vector Search files..." else "Search files..."
-                )
+    if (isAppLocked && settings.isAppLockEnabled) {
+        AppLockScreen(
+            onVerifyPasscode = { pin ->
+                settingsRepository.verifyPasscode(pin)
+            },
+            onSuccess = {
+                isAppLocked = false
             }
-        },
-        bottomBar = {
-            BottomNavigationBar(
-                currentTab = currentTab,
-                onTabSelected = { currentTab = it }
-            )
-        },
-        floatingActionButton = {
-            UploadFloatingActionButton(
-                onClick = {
-                    filePickerLauncher.launch("*/*")
-                }
-            )
-        },
-        floatingActionButtonPosition = FabPosition.Start
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                if (isUploading) {
-                    UploadProgressBar(
-                        fileName = currentUploadingFileName,
-                        progress = uploadProgress
+        )
+    } else {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.background,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    TopSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { newQuery ->
+                            searchQuery = newQuery
+                            if (newQuery.isNotBlank() && currentTab != NavigationTab.FILES) {
+                                currentTab = NavigationTab.FILES
+                            }
+                        },
+                        placeholder = if (settings.isJinaConfigured) "⚡ Jina Vector Search files..." else "Search files..."
                     )
                 }
+            },
+            bottomBar = {
+                BottomNavigationBar(
+                    currentTab = currentTab,
+                    onTabSelected = { currentTab = it }
+                )
+            },
+            floatingActionButton = {
+                UploadFloatingActionButton(
+                    onClick = {
+                        filePickerLauncher.launch("*/*")
+                    }
+                )
+            },
+            floatingActionButtonPosition = FabPosition.Start
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (isUploading) {
+                        UploadProgressBar(
+                            fileName = currentUploadingFileName,
+                            progress = uploadProgress
+                        )
+                    }
 
-                Box(modifier = Modifier.weight(1f)) {
-                    when (currentTab) {
-                        NavigationTab.MENU -> {
-                            MenuTabContent(
-                                settings = settings,
-                                onSaveSettings = { newSettings ->
-                                    settingsRepository.saveSettings(newSettings)
-                                    settings = newSettings
-                                    scope.launch {
-                                        snackbarHostState.showSnackbar("تم حفظ الإعدادات بنجاح!")
+                    Box(modifier = Modifier.weight(1f)) {
+                        when (currentTab) {
+                            NavigationTab.MENU -> {
+                                MenuTabContent(
+                                    settings = settings,
+                                    onSaveSettings = { newSettings ->
+                                        settingsRepository.saveSettings(newSettings)
+                                        settings = newSettings
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("تم حفظ الإعدادات بنجاح!")
+                                        }
+                                    },
+                                    onTestConnection = { settingsToTest, onResult ->
+                                        scope.launch {
+                                            val result = telegramUploader.testConnection(settingsToTest)
+                                            onResult(result)
+                                        }
+                                    },
+                                    onTestJinaConnection = { apiKeyToTest, onResult ->
+                                        scope.launch {
+                                            val result = jinaVectorManager.testConnection(apiKeyToTest)
+                                            onResult(result)
+                                        }
+                                    },
+                                    onSetPasscode = { pin ->
+                                        val newSettings = settingsRepository.setPasscode(pin)
+                                        settings = newSettings
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("تم تعيين رمز PIN وقفل التطبيق بنجاح!")
+                                        }
+                                    },
+                                    onRemovePasscode = {
+                                        val newSettings = settingsRepository.removePasscode()
+                                        settings = newSettings
+                                        isAppLocked = false
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("تم إلغاء قفل التطبيق.")
+                                        }
+                                    },
+                                    onRunWhatsAppBackupNow = {
+                                        if (!settings.isConfigured) {
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar("يرجى إعداد بيانات التلجرام أولاً.")
+                                            }
+                                        } else {
+                                            WhatsAppBackupScheduler.runImmediateBackup(context)
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar("تم بدء النسخ الاحتياطي لوسائط الواتساب في الخلفية!")
+                                            }
+                                        }
+                                    },
+                                    onReindexFiles = {
+                                        reindexFilesWithoutVectors()
+                                    },
+                                    filesWithoutVectorsCount = uploadedFiles.count { it.vector == null },
+                                    totalFilesCount = uploadedFiles.size
+                                )
+                            }
+                            NavigationTab.FILES -> {
+                                FilesTabContent(
+                                    searchQuery = searchQuery,
+                                    files = uploadedFiles,
+                                    vectorScores = vectorScores,
+                                    isVectorSearching = isVectorSearching,
+                                    onDownloadFile = { file ->
+                                        handleDownloadFile(file)
+                                    },
+                                    onDeleteFile = { id ->
+                                        fileRepository.deleteFile(id)
+                                        refreshFiles()
+                                    },
+                                    onUploadClick = {
+                                        filePickerLauncher.launch("*/*")
                                     }
-                                },
-                                onTestConnection = { settingsToTest, onResult ->
-                                    scope.launch {
-                                        val result = telegramUploader.testConnection(settingsToTest)
-                                        onResult(result)
+                                )
+                            }
+                            NavigationTab.DOWNLOADS -> {
+                                DownloadsTabContent(
+                                    searchQuery = searchQuery,
+                                    downloadedFiles = downloadedFiles,
+                                    onOpenFile = { file ->
+                                        handleOpenDownloadedFile(file)
+                                    },
+                                    onShareFile = { file ->
+                                        handleShareDownloadedFile(file)
+                                    },
+                                    onDeleteFile = { id ->
+                                        downloadedFileRepository.deleteDownloadedFile(id)
+                                        refreshDownloadedFiles()
                                     }
-                                },
-                                onTestJinaConnection = { apiKeyToTest, onResult ->
-                                    scope.launch {
-                                        val result = jinaVectorManager.testConnection(apiKeyToTest)
-                                        onResult(result)
+                                )
+                            }
+                            NavigationTab.GALLERY -> {
+                                GalleryTabContent(
+                                    onPickPhotos = {
+                                        photoPickerLauncher.launch("image/*")
                                     }
-                                },
-                                onReindexFiles = {
-                                    reindexFilesWithoutVectors()
-                                },
-                                filesWithoutVectorsCount = uploadedFiles.count { it.vector == null },
-                                totalFilesCount = uploadedFiles.size
-                            )
-                        }
-                        NavigationTab.FILES -> {
-                            FilesTabContent(
-                                searchQuery = searchQuery,
-                                files = uploadedFiles,
-                                vectorScores = vectorScores,
-                                isVectorSearching = isVectorSearching,
-                                onDownloadFile = { file ->
-                                    handleDownloadFile(file)
-                                },
-                                onDeleteFile = { id ->
-                                    fileRepository.deleteFile(id)
-                                    refreshFiles()
-                                },
-                                onUploadClick = {
-                                    filePickerLauncher.launch("*/*")
-                                }
-                            )
-                        }
-                        NavigationTab.DOWNLOADS -> {
-                            DownloadsTabContent(
-                                searchQuery = searchQuery,
-                                downloadedFiles = downloadedFiles,
-                                onOpenFile = { file ->
-                                    handleOpenDownloadedFile(file)
-                                },
-                                onShareFile = { file ->
-                                    handleShareDownloadedFile(file)
-                                },
-                                onDeleteFile = { id ->
-                                    downloadedFileRepository.deleteDownloadedFile(id)
-                                    refreshDownloadedFiles()
-                                }
-                            )
-                        }
-                        NavigationTab.GALLERY -> {
-                            GalleryTabContent(
-                                onPickPhotos = {
-                                    photoPickerLauncher.launch("image/*")
-                                }
-                            )
+                                )
+                            }
                         }
                     }
                 }
