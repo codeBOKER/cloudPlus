@@ -1,20 +1,26 @@
 package com.umbo.cloudplus.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -25,6 +31,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +45,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.umbo.cloudplus.data.Settings
+import com.umbo.cloudplus.ui.components.PasscodeSetupDialog
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun MenuTabContent(
@@ -44,6 +56,9 @@ fun MenuTabContent(
     onSaveSettings: (Settings) -> Unit,
     onTestConnection: (Settings, (Result<Unit>) -> Unit) -> Unit,
     onTestJinaConnection: (String, (Result<Unit>) -> Unit) -> Unit,
+    onSetPasscode: (String) -> Unit = {},
+    onRemovePasscode: () -> Unit = {},
+    onRunWhatsAppBackupNow: () -> Unit = {},
     onReindexFiles: (() -> Unit)? = null,
     filesWithoutVectorsCount: Int = 0,
     totalFilesCount: Int
@@ -61,6 +76,8 @@ fun MenuTabContent(
 
     var jinaTestResult by remember { mutableStateOf<String?>(null) }
     var isTestingJina by remember { mutableStateOf(false) }
+
+    var showPasscodeDialog by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
 
@@ -95,6 +112,209 @@ fun MenuTabContent(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
+                }
+            }
+        }
+
+        // Security & App Lock Settings Card
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "App Security & Passcode Lock",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "App Lock (4-Digit PIN Passcode)",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = if (settings.isAppLockEnabled) "Enabled - PIN required when opening app" else "Disabled",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.isAppLockEnabled,
+                        onCheckedChange = { isChecked ->
+                            if (isChecked) {
+                                showPasscodeDialog = true
+                            } else {
+                                onRemovePasscode()
+                            }
+                        }
+                    )
+                }
+
+                if (settings.isAppLockEnabled) {
+                    OutlinedButton(
+                        onClick = { showPasscodeDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Lock, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Change PIN Passcode")
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Screen Protection (FLAG_SECURE)",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Block screenshots & obscure recent apps switcher preview",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.isScreenSecurityEnabled,
+                        onCheckedChange = { isChecked ->
+                            val updated = settings.copy(isScreenSecurityEnabled = isChecked)
+                            onSaveSettings(updated)
+                        }
+                    )
+                }
+            }
+        }
+
+        // WhatsApp Photo & Video Auto-Backup Card
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Backup,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "WhatsApp Photo & Video Auto-Backup",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Automated WhatsApp Media Backup",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = if (settings.isWhatsAppBackupEnabled) "Enabled - Runs automatically in background" else "Disabled",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.isWhatsAppBackupEnabled,
+                        onCheckedChange = { isChecked ->
+                            val updated = settings.copy(isWhatsAppBackupEnabled = isChecked)
+                            onSaveSettings(updated)
+                        }
+                    )
+                }
+
+                if (settings.isWhatsAppBackupEnabled) {
+                    Text(
+                        text = "Backup Frequency Interval:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    val intervals = listOf(
+                        1 to "Every 1 Month",
+                        3 to "Every 3 Months (Default)",
+                        6 to "Every 6 Months"
+                    )
+
+                    Column {
+                        intervals.forEach { (months, label) ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val updated = settings.copy(backupIntervalMonths = months)
+                                        onSaveSettings(updated)
+                                    }
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                RadioButton(
+                                    selected = (settings.backupIntervalMonths == months),
+                                    onClick = {
+                                        val updated = settings.copy(backupIntervalMonths = months)
+                                        onSaveSettings(updated)
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+
+                    val lastBackupText = if (settings.lastBackupTimestamp > 0L) {
+                        val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                        "Last backup completed: " + sdf.format(Date(settings.lastBackupTimestamp))
+                    } else {
+                        "No automatic backup performed yet"
+                    }
+
+                    Text(
+                        text = lastBackupText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedButton(
+                        onClick = onRunWhatsAppBackupNow,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Backup, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Start WhatsApp Backup Now")
+                    }
                 }
             }
         }
@@ -228,7 +448,7 @@ fun MenuTabContent(
                 ) {
                     Button(
                         onClick = {
-                            val newSettings = Settings(
+                            val newSettings = settings.copy(
                                 botToken = botToken.trim(),
                                 chatId = chatId.trim(),
                                 encryptionPassword = encryptionPassword,
@@ -251,7 +471,7 @@ fun MenuTabContent(
                             onClick = {
                                 isTestingTelegram = true
                                 telegramTestResult = "Testing connection..."
-                                val testSettings = Settings(
+                                val testSettings = settings.copy(
                                     botToken = botToken.trim(),
                                     chatId = chatId.trim(),
                                     encryptionPassword = encryptionPassword,
@@ -305,5 +525,15 @@ fun MenuTabContent(
                 }
             }
         }
+    }
+
+    if (showPasscodeDialog) {
+        PasscodeSetupDialog(
+            onDismiss = { showPasscodeDialog = false },
+            onPasscodeSet = { pin ->
+                onSetPasscode(pin)
+                showPasscodeDialog = false
+            }
+        )
     }
 }
